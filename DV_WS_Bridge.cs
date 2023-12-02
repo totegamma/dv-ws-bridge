@@ -74,6 +74,15 @@ namespace DV_WS_Bridge
             {
                 this.handler = handler;
                 MatchCollection matches = requestSyntax.Matches(str);
+                if (matches.Count == 0)
+                {
+                    this.action = "";
+                    this.slotName = "";
+                    this.variableName = "";
+                    this.type = "";
+                    this.value = "";
+                    return;
+                }
                 GroupCollection groups = matches[0].Groups;
                 this.action = groups["action"].Value;
                 this.slotName = groups["slotName"].Value;
@@ -126,14 +135,11 @@ namespace DV_WS_Bridge
                         Dictionary<WSHandler, List<string>> responces = new Dictionary<WSHandler, List<string>>();
                         while (Main.requestQueue.TryDequeue(out DVRequest job))
                         {
-
                             if (!responces.ContainsKey(job.handler)) responces[job.handler] = new List<string>();
 
                             var do_slot_lookup = !slot_cache.ContainsKey(job.slotName)
                                 || slot_cache[job.slotName] == null
-                                || slot_cache[job.slotName].IsDisposed
                                 || slot_cache[job.slotName].Parent.Name != job.slotName;
-
 
                             if (do_slot_lookup)
                             {
@@ -145,15 +151,29 @@ namespace DV_WS_Bridge
                                     responces[job.handler].Add($"ERROR {job} (slot not found)");
                                     continue;
                                 }
+                                foundSlot.OnPrepareDestroy += (Slot slot) => {
+                                    Msg($"destroyed slot {job.slotName}");
+                                    slot_cache.TryRemove(job.slotName, out _);
+                                };
+
                                 DynamicVariableSpace foundSpace = foundSlot.FindSpace("");
                                 if (foundSpace == null) {
                                     responces[job.handler].Add($"ERROR {job} (space not found)");
                                     continue;
                                 }
+                                foundSpace.Destroyed += (_ic) => {
+                                    Msg($"destroyed space {job.slotName}");
+                                    slot_cache.TryRemove(job.slotName, out _);
+                                };
+
                                 slot_cache[job.slotName] = foundSpace;
                             }
 
                             var space = slot_cache[job.slotName];
+                            if (space.IsDisposed) {
+                                responces[job.handler].Add($"ERROR {job} (space disposed)");
+                                continue;
+                            }
 
                             if (job.action == "set")
                                 switch (job.type)
