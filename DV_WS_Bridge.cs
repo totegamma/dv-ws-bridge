@@ -68,8 +68,6 @@ namespace DV_WS_Bridge
             public string type;
             public string value; // only available on set
 
-            public DynamicVariableSpace space;
-
             static Regex requestSyntax = new Regex(@"(?<action>\w+)\s(?<slotName>\w+)\/(?<variableName>\w+)<(?<type>\w+)>(\s?(?<value>.+))?", RegexOptions.Compiled);
 
             public DVRequest(WSHandler handler, string str)
@@ -82,7 +80,6 @@ namespace DV_WS_Bridge
                 this.variableName = groups["variableName"].Value;
                 this.type = groups["type"].Value;
                 this.value = groups["value"].Value;
-                this.space = null;
             }
 
             override public string ToString()
@@ -91,7 +88,9 @@ namespace DV_WS_Bridge
             }
         }
 
-        static ConcurrentQueue<DVRequest> requestQueue = new ConcurrentQueue<DVRequest>();
+
+        static ConcurrentDictionary<string, DynamicVariableSpace> slot_cache = new();
+        static ConcurrentQueue<DVRequest> requestQueue = new();
 
         public override void OnEngineInit()
         {
@@ -115,56 +114,53 @@ namespace DV_WS_Bridge
         [HarmonyPatch(typeof(FrooxEngine.Engine), "RunUpdateLoop")]
         class Patch
         {
-            static Dictionary<string, DynamicVariableSpace> slot_cache = new Dictionary<string, DynamicVariableSpace>();
-
-
-
             static bool Prefix(FrooxEngine.Engine __instance)
             {
 
                 if (__instance.WorldManager.FocusedWorld == null) return true;
-
-                List<DVRequest> jobs = new List<DVRequest>();
-
-                while (Main.requestQueue.TryDequeue(out DVRequest request))
-                {
-                    try
-                    {
-                        if (!slot_cache.ContainsKey(request.slotName))
-                        {
-                            Slot root = __instance.WorldManager.FocusedWorld.RootSlot;
-                            Slot foundSlot = root.FindChild(request.slotName, false, false);
-                            if (foundSlot == null) continue;
-                            DynamicVariableSpace foundSpace = foundSlot.FindSpace("");
-                            if (foundSpace == null) continue;
-                            slot_cache[request.slotName] = foundSpace;
-                        }
-
-                        request.space = slot_cache[request.slotName];
-
-                        jobs.Add(request);
-
-                    }
-                    catch (Exception e)
-                    {
-                        Msg(e);
-                    }
-                }
-
-                if (jobs.Count != 0)
+                var hasItems = requestQueue.TryPeek(out _);
+                if (hasItems)
                 {
                     __instance.WorldManager.FocusedWorld.RunSynchronously(() =>
                     {
                         Dictionary<WSHandler, List<string>> responces = new Dictionary<WSHandler, List<string>>();
-                        foreach (DVRequest job in jobs)
+                        while (Main.requestQueue.TryDequeue(out DVRequest job))
                         {
+
                             if (!responces.ContainsKey(job.handler)) responces[job.handler] = new List<string>();
+
+                            var do_slot_lookup = !slot_cache.ContainsKey(job.slotName)
+                                || slot_cache[job.slotName] == null
+                                || slot_cache[job.slotName].IsDisposed
+                                || slot_cache[job.slotName].Parent.Name != job.slotName;
+
+
+                            if (do_slot_lookup)
+                            {
+                                slot_cache.TryRemove(job.slotName, out _);
+
+                                Slot root = __instance.WorldManager.FocusedWorld.RootSlot;
+                                Slot foundSlot = root.FindChild(job.slotName, false, false);
+                                if (foundSlot == null) {
+                                    responces[job.handler].Add($"ERROR {job} (slot not found)");
+                                    continue;
+                                }
+                                DynamicVariableSpace foundSpace = foundSlot.FindSpace("");
+                                if (foundSpace == null) {
+                                    responces[job.handler].Add($"ERROR {job} (space not found)");
+                                    continue;
+                                }
+                                slot_cache[job.slotName] = foundSpace;
+                            }
+
+                            var space = slot_cache[job.slotName];
+
                             if (job.action == "set")
                                 switch (job.type)
                                 {
                                     case "string":
                                         {
-                                            bool ok = job.space.TryWriteValue<string>(job.variableName, job.value);
+                                            bool ok = space.TryWriteValue<string>(job.variableName, job.value);
                                             if (!ok) responces[job.handler].Add($"ERROR {job}");
                                             break;
                                         }
@@ -176,7 +172,7 @@ namespace DV_WS_Bridge
                                                 responces[job.handler].Add($"ERROR {job}");
                                                 continue;
                                             }
-                                            ok = job.space.TryWriteValue<bool>(job.variableName, parsed);
+                                            ok = space.TryWriteValue<bool>(job.variableName, parsed);
                                             if (!ok) responces[job.handler].Add($"ERROR {job}");
                                             break;
                                         }
@@ -188,7 +184,7 @@ namespace DV_WS_Bridge
                                                 responces[job.handler].Add($"ERROR {job}");
                                                 continue;
                                             }
-                                            ok = job.space.TryWriteValue<int>(job.variableName, parsed);
+                                            ok = space.TryWriteValue<int>(job.variableName, parsed);
                                             if (!ok) responces[job.handler].Add($"ERROR {job}");
                                             break;
                                         }
@@ -200,7 +196,7 @@ namespace DV_WS_Bridge
                                                 responces[job.handler].Add($"ERROR {job}");
                                                 continue;
                                             }
-                                            ok = job.space.TryWriteValue<float>(job.variableName, parsed);
+                                            ok = space.TryWriteValue<float>(job.variableName, parsed);
                                             if (!ok) responces[job.handler].Add($"ERROR {job}");
                                             break;
                                         }
@@ -212,7 +208,7 @@ namespace DV_WS_Bridge
                                                 responces[job.handler].Add($"ERROR {job}");
                                                 continue;
                                             }
-                                            ok = job.space.TryWriteValue<float2>(job.variableName, parsed);
+                                            ok = space.TryWriteValue<float2>(job.variableName, parsed);
                                             if (!ok) responces[job.handler].Add($"ERROR {job}");
                                             break;
                                         }
@@ -224,7 +220,7 @@ namespace DV_WS_Bridge
                                                 responces[job.handler].Add($"ERROR {job}");
                                                 continue;
                                             }
-                                            ok = job.space.TryWriteValue<float3>(job.variableName, parsed);
+                                            ok = space.TryWriteValue<float3>(job.variableName, parsed);
                                             if (!ok) responces[job.handler].Add($"ERROR {job}");
                                             break;
                                         }
@@ -236,7 +232,7 @@ namespace DV_WS_Bridge
                                                 responces[job.handler].Add($"ERROR {job}");
                                                 continue;
                                             }
-                                            ok = job.space.TryWriteValue<floatQ>(job.variableName, parsed);
+                                            ok = space.TryWriteValue<floatQ>(job.variableName, parsed);
                                             if (!ok) responces[job.handler].Add($"ERROR {job}");
                                             break;
                                         }
@@ -249,49 +245,49 @@ namespace DV_WS_Bridge
                                 {
                                     case "string":
                                         {
-                                            bool ok = job.space.TryReadValue<string>(job.variableName, out string value);
+                                            bool ok = space.TryReadValue<string>(job.variableName, out string value);
                                             if (ok) responces[job.handler].Add($"VALUE {job.slotName}/{job.variableName}<{job.type}> {value}");
                                             else responces[job.handler].Add($"ERROR {job}");
                                             break;
                                         }
                                     case "bool":
                                         {
-                                            bool ok = job.space.TryReadValue<bool>(job.variableName, out bool value);
+                                            bool ok = space.TryReadValue<bool>(job.variableName, out bool value);
                                             if (ok) responces[job.handler].Add($"VALUE {job.slotName}/{job.variableName}<{job.type}> {value}");
                                             else responces[job.handler].Add($"ERROR {job}");
                                             break;
                                         }
                                     case "int":
                                         {
-                                            bool ok = job.space.TryReadValue<int>(job.variableName, out int value);
+                                            bool ok = space.TryReadValue<int>(job.variableName, out int value);
                                             if (ok) responces[job.handler].Add($"VALUE {job.slotName}/{job.variableName}<{job.type}> {value}");
                                             else responces[job.handler].Add($"ERROR {job}");
                                             break;
                                         }
                                     case "float":
                                         {
-                                            bool ok = job.space.TryReadValue<float>(job.variableName, out float value);
+                                            bool ok = space.TryReadValue<float>(job.variableName, out float value);
                                             if (ok) responces[job.handler].Add($"VALUE {job.slotName}/{job.variableName}<{job.type}> {value}");
                                             else responces[job.handler].Add($"ERROR {job}");
                                             break;
                                         }
                                     case "float2":
                                         {
-                                            bool ok = job.space.TryReadValue<float2>(job.variableName, out float2 value);
+                                            bool ok = space.TryReadValue<float2>(job.variableName, out float2 value);
                                             if (ok) responces[job.handler].Add($"VALUE {job.slotName}/{job.variableName}<{job.type}> {value}");
                                             else responces[job.handler].Add($"ERROR {job}");
                                             break;
                                         }
                                     case "float3":
                                         {
-                                            bool ok = job.space.TryReadValue<float3>(job.variableName, out float3 value);
+                                            bool ok = space.TryReadValue<float3>(job.variableName, out float3 value);
                                             if (ok) responces[job.handler].Add($"VALUE {job.slotName}/{job.variableName}<{job.type}> {value}");
                                             else responces[job.handler].Add($"ERROR {job}");
                                             break;
                                         }
                                     case "floatQ":
                                         {
-                                            bool ok = job.space.TryReadValue<floatQ>(job.variableName, out floatQ value);
+                                            bool ok = space.TryReadValue<floatQ>(job.variableName, out floatQ value);
                                             if (ok) responces[job.handler].Add($"VALUE {job.slotName}/{job.variableName}<{job.type}> {value}");
                                             else responces[job.handler].Add($"ERROR {job}");
                                             break;
