@@ -10,8 +10,8 @@ localhost:8787でlistenするのでそこに接続してください。
 
 syntax: `set SLOT_NAME/DV_NAME<TYPE> VALUE`
 
-```
-[totegamma@17:18]~$ wscat -c 172.29.240.1:8787
+```bash
+[totegamma@17:18]~$ wscat -c localhost:8787
 Connected (press CTRL+C to quit)
 > set unique_name_slot/mybooldv<bool> true
 > set unique_name_slot/myintdv<int> 57
@@ -24,8 +24,8 @@ Connected (press CTRL+C to quit)
 
 syntax: `get SLOT_NAME/DV_NAME<TYPE>`
 
-```
-[totegamma@17:22]~$ wscat -c 172.29.240.1:8787
+```bash
+[totegamma@17:22]~$ wscat -c localhost:8787
 Connected (press CTRL+C to quit)
 > get unique_name_slot/mybooldv<bool>
 < VALUE unique_name_slot/mybooldv<bool> True
@@ -40,6 +40,7 @@ Connected (press CTRL+C to quit)
 
 ## Notes
 
+- Slot名、DV名に使えるのはa-z,A-Z,0-9,_からなる文字列です。
 - 現在対応している型は、`string`, `bool`, `int`, `float`, `float2`, `float3`, `floatQ`です。
 - Slot名が複数マッチした場合は動作が不定になります
 - SlotをRootSlotからFindChildByNameを行った後、そのSlotに対してGetDynamicVariableSpaceを行うという処理になっています。なので、読み書きするDynamicVariableのコンポーネントと同じDV空間であれば、コマンドで指定する`SLOT_NAME`に直接DynamicValueVariableコンポーネントないしDynamicVariableSpaceがアタッチされている必要はありません。
